@@ -369,7 +369,7 @@ if st.session_state["acknowledged"]:
             if events:
                 entry = lab_values.copy()
                 entry.update({"Detected Events": events})
-                save_to_csv(entry)
+                #save_to_csv(entry)
             
             # Filter events that require dose modification
             events_with_modifications = [
