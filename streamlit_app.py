@@ -293,7 +293,7 @@ if st.session_state["acknowledged"]:
         lab_values['Platelet'] = st.number_input("Platelet Count (µL)", min_value=0.0)
         lab_values['Hemoglobin'] = st.number_input("Hemoglobin (g/dL)", min_value=0.0)
         lab_values['WBC'] = st.number_input("White Blood Cell Count (WBC)(µL)", min_value=0.0)
-        lab_values['ANC'] = st.number_input("Absolute Neutrophil Count (ANC) (µL)", min_value=0)
+        lab_values['ANC'] = st.number_input("Absolute Neutrophil Count (ANC) (µL)", min_value=0.0)
         lab_values['Creatinine Clearance'] = st.number_input("Creatinine Clearance (mL/min)", min_value=0.0)
         lab_values['Baseline Creatinine Clearance'] = st.number_input("Baseline Creatinine Clearance (mL/min)", min_value=0.0)
         lab_values['Bilirubin'] = st.number_input("Bilirubin (3x times ULN)", min_value=0.0)
