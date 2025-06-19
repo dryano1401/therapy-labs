@@ -179,7 +179,7 @@ if st.session_state["acknowledged"]:
         return issues
 
     # Streamlit app layout
-    st.title("🩺 REACT: Radionuclide Evaluation & Assessment for Clinical Toxicity")
+    st.title("🩺 REACT: Radiotheranostic Evaluation & Assessment for Clinical Toxicity")
     st.markdown("**Based on CTCAE v5.0 and FDA Prescribing Information**")
     
     st.info("📋 This tool evaluates laboratory values against CTCAE criteria and provides dose modification guidance for LUTATHERA and PLUVICTO based on official prescribing information.")
