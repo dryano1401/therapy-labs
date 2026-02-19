@@ -1,407 +1,664 @@
+import re
 import streamlit as st
-import pandas as pd
 
-# Initialize session state for acknowledgment
+# =========================
+# REACT: Radionuclide Therapy Toxicity Tool
+# CTCAE v5.0 grading + FDA label-inspired dose-mod guidance
+# Educational use only
+# =========================
+
+st.set_page_config(page_title="REACT Toxicity Tool", layout="wide")
+
+# -------------------------
+# Session state: acknowledgment
+# -------------------------
 if "acknowledged" not in st.session_state:
     st.session_state["acknowledged"] = False
 
-# Acknowledgment logic
 if not st.session_state["acknowledged"]:
-    st.warning("⚠️ **IMPORTANT DISCLAIMER**\n\nThis application is for educational and guidance purposes only. All results should be independently verified by qualified healthcare professionals. This tool does not replace clinical judgment or official prescribing information.")
-    
+    st.warning(
+        "⚠️ **IMPORTANT DISCLAIMER**\n\n"
+        "This application is for educational and guidance purposes only. "
+        "All results should be independently verified by qualified healthcare professionals. "
+        "This tool does not replace clinical judgment or official prescribing information."
+    )
     if st.button("I Acknowledge and Understand"):
         st.session_state["acknowledged"] = True
         st.rerun()
 
-if st.session_state["acknowledged"]:
-    
-    # CTCAE Grading Criteria based on CTCAE v5.0
-    ctcae_criteria = {
-        'Anemia': {
-            'Grade 1': {'Hemoglobin': {'min': 10.0, 'max': 12.6}},  # g/dL
-            'Grade 2': {'Hemoglobin': {'min': 8.0, 'max': 9.9}},
-            'Grade 3': {'Hemoglobin': {'min': 6.1, 'max': 7.9}},
-            'Grade 4': {'Hemoglobin': {'max': 6.0}}
-        },
-        'Thrombocytopenia': {
-            'Grade 1': {'Platelet': {'min': 75, 'max': 150}},  # /mm³
-            'Grade 2': {'Platelet': {'min': 50, 'max': 74}},
-            'Grade 3': {'Platelet': {'min': 25, 'max': 49}},
-            'Grade 4': {'Platelet': {'max': 24}}
-        },
-        'Leukopenia': {
-            'Grade 1': {'WBC': {'min': 3, 'max': 3.9}},  # /mm³
-            'Grade 2': {'WBC': {'min': 2, 'max': 2.9}},
-            'Grade 3': {'WBC': {'min': 1, 'max': 1.9}},
-            'Grade 4': {'WBC': {'max': 0.99}}
-        },
-        'Neutropenia': {
-            'Grade 1': {'ANC': {'min': 1.5, 'max': 1.999}},  # /mm³
-            'Grade 2': {'ANC': {'min': 1.0, 'max': 1.499}},
-            'Grade 3': {'ANC': {'min': 0.5, 'max': 0.999}},
-            'Grade 4': {'ANC': {'max': 0.499}}
-        },
-        'Acute Kidney Injury': {
-            'Grade 1': {'Creatinine_Increase': {'min': 1.5, 'max': 1.9}},  # times baseline
-            'Grade 2': {'Creatinine_Increase': {'min': 2.0, 'max': 2.9}},
-            'Grade 3': {'Creatinine_Increase': {'min': 3.0, 'max': 5.9}},
-            'Grade 4': {'Creatinine_Increase': {'min': 6.0}}
-        }
-    }
+if not st.session_state["acknowledged"]:
+    st.stop()
 
-    # Dose modification guidelines
-    dose_modifications = {
-        'LUTATHERA': {
-            'Thrombocytopenia': {
-                'Grade 2': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 3': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 4': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Recurrent Grade 2-4': 'Permanently discontinue LUTATHERA.'
-            },
-            'Anemia': {
-                'Grade 3': 'Withhold dose until resolution to Grade 0-2. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 4': 'Withhold dose until resolution to Grade 0-2. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Recurrent Grade 3-4': 'Permanently discontinue LUTATHERA.'
-            },
-            'Neutropenia': {
-                'Grade 3': 'Withhold dose until resolution to Grade 0-2. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 4': 'Withhold dose until resolution to Grade 0-2. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Recurrent Grade 3-4': 'Permanently discontinue LUTATHERA.'
-            },
-            'Leukopenia': {
-                'Grade 2': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 3': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Grade 4': 'Withhold dose until resolution to Grade 0-1. Resume at 3.7 GBq if resolved. Return to 7.4 GBq if no recurrence.',
-                'Recurrent Grade 2-4': 'Permanently discontinue LUTATHERA.'
-            },
-            'Renal Toxicity': {
-                'CLcr < 40 mL/min': 'Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved.',
-                '40% increase from baseline creatinine': 'Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved.',
-                '40% decrease from baseline CLcr': 'Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved.',
-                'Recurrent renal toxicity': 'Permanently discontinue LUTATHERA.'
-            },
-            'Hepatotoxicity': {
-                'Bilirubin > 3x ULN': 'Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved.',
-                'Albumin < 30 g/L with INR > 1.5': 'Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved.',
-                'Recurrent hepatotoxicity': 'Permanently discontinue LUTATHERA.'
-            }
-        },
-        'PLUVICTO': {
-            'Myelosuppression': {
-                'Grade 2': 'Withhold PLUVICTO until improvement to Grade 1 or baseline.',
-                'Grade ≥ 3': 'Withhold PLUVICTO until improvement to Grade 1 or baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).',
-                'Recurrent Grade ≥ 3': 'Permanently discontinue PLUVICTO.'
-            },
-            'Renal Toxicity': {
-                'Grade ≥ 2 creatinine increase': 'Withhold PLUVICTO until improvement.',
-                'CLcr < 30 mL/min': 'Withhold PLUVICTO until improvement.',
-                '≥40% creatinine increase + >40% CLcr decrease': 'Withhold PLUVICTO until improvement or return to baseline. Reduce dose by 20% to 5.9 GBq.',
-                'Grade ≥ 3 renal toxicity': 'Permanently discontinue PLUVICTO.',
-                'Recurrent renal toxicity': 'Permanently discontinue PLUVICTO.'
-            },
-            'Dry Mouth': {
-                'Grade 2': 'Withhold PLUVICTO until improvement or return to baseline. Consider reducing dose by 20% to 5.9 GBq.',
-                'Grade 3': 'Withhold PLUVICTO until improvement or return to baseline. Reduce dose by 20% to 5.9 GBq.',
-                'Recurrent Grade 3': 'Permanently discontinue PLUVICTO.'
-            },
-            'Fatigue': {
-                'Grade ≥ 3': 'Withhold PLUVICTO until improvement to Grade 2 or baseline.'
-            },
-            'GI Toxicity': {
-                'Grade ≥ 3': 'Withhold PLUVICTO until improvement to Grade 2 or baseline. Reduce dose by 20% to 5.9 GBq.',
-                'Recurrent Grade ≥ 3': 'Permanently discontinue PLUVICTO.'
-            },
-            'AST/ALT Elevation': {
-                'AST or ALT > 5x ULN without liver metastases': 'Permanently discontinue PLUVICTO.'
-            }
-        }
-    }
-
-    def determine_ctcae_grade(parameter, value, drug=None):
-        """Determine CTCAE grade based on parameter value"""
-        grades = []
-        
-        if parameter in ctcae_criteria:
-            for grade, limits in ctcae_criteria[parameter].items():
-                for lab, thresholds in limits.items():
-                    if lab == 'Creatinine_Increase':
-                        continue  # Handle separately
-                    
-                    if value is not None and value > 0:
-                        meets_min = 'min' not in thresholds or value >= thresholds['min']
-                        meets_max = 'max' not in thresholds or value <= thresholds['max']
-                        
-                        if meets_min and meets_max:
-                            grades.append(grade)
-        
-        # Return highest grade found
-        if grades:
-            grade_order = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4']
-            for grade in reversed(grade_order):
-                if grade in grades:
-                    return grade
+# -------------------------
+# Helpers
+# -------------------------
+def parse_float(text: str):
+    """Parse user text to float; empty/invalid -> None."""
+    if text is None:
+        return None
+    s = str(text).strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except ValueError:
         return None
 
-    def assess_renal_function(baseline_creatinine, current_creatinine, baseline_clcr, current_clcr):
-        """Assess renal toxicity"""
-        issues = []
-        
-        if current_clcr is not None and current_clcr < 30:
-            issues.append("CLcr < 30 mL/min")
-        
-        if baseline_creatinine and current_creatinine and baseline_creatinine > 0:
-            creatinine_increase = current_creatinine / baseline_creatinine
-            if creatinine_increase >= 2.0:
-                if creatinine_increase >= 3.0:
-                    issues.append("Grade ≥ 3 renal toxicity")
-                else:
-                    issues.append("Grade ≥ 2 creatinine increase")
-            
-            if creatinine_increase >= 1.4:  # ≥40% increase
-                if baseline_clcr and current_clcr and baseline_clcr > 0:
-                    clcr_decrease = (baseline_clcr - current_clcr) / baseline_clcr
-                    if clcr_decrease > 0.4:  # >40% decrease
-                        issues.append("≥40% creatinine increase + >40% CLcr decrease")
-        
-        return issues
+def parse_int(text: str):
+    """Parse user text to int; empty/invalid -> None."""
+    v = parse_float(text)
+    if v is None:
+        return None
+    try:
+        return int(round(v))
+    except Exception:
+        return None
 
-    def assess_hepatotoxicity(bilirubin, albumin, inr, uln_bilirubin=1.0):
-        """Assess hepatotoxicity"""
-        issues = []
-        
-        if bilirubin is not None and bilirubin > 3 * uln_bilirubin:
+def normalize_grade_string(s: str):
+    """
+    Extract (op, n) from strings like:
+      "Grade 2", "Grade ≥ 3", "Grade >=3", "Grade 3-4"
+    Returns (op, n) where op is "=" or ">=" or None.
+    """
+    if not s:
+        return None, None
+    s = str(s)
+
+    # If range like "Grade 3-4", treat as Grade 3 for thresholding purposes
+    m_range = re.search(r"Grade\s*(\d+)\s*-\s*(\d+)", s)
+    if m_range:
+        return ">=", int(m_range.group(1))
+
+    m = re.search(r"Grade\s*([≥>=]*)\s*(\d+)", s)
+    if not m:
+        return None, None
+
+    op = m.group(1)
+    n = int(m.group(2))
+    if "≥" in op or ">=" in op:
+        return ">=", n
+    return "=", n
+
+def pick_guidance(type_modifications: dict, grade_or_condition: str):
+    """Deterministic guidance selection: exact match -> grade-aware threshold -> None."""
+    if not type_modifications:
+        return None
+
+    # exact key match
+    if grade_or_condition in type_modifications:
+        return type_modifications[grade_or_condition]
+
+    # grade-aware threshold match
+    op_q, n_q = normalize_grade_string(grade_or_condition)
+    if n_q is not None:
+        # First pass: non-recurrent keys
+        best = None
+        best_thresh = None
+        for k, v in type_modifications.items():
+            if "Recurrent" in k:
+                continue
+            op_k, n_k = normalize_grade_string(k)
+            if n_k is None:
+                continue
+            if op_k == "=" and n_q == n_k:
+                return v
+            if op_k == ">=" and n_q >= n_k:
+                # choose the highest threshold that is still <= n_q
+                if best_thresh is None or n_k > best_thresh:
+                    best = v
+                    best_thresh = n_k
+        if best is not None:
+            return best
+
+        # Second pass: recurrent keys
+        best = None
+        best_thresh = None
+        for k, v in type_modifications.items():
+            if "Recurrent" not in k:
+                continue
+            op_k, n_k = normalize_grade_string(k)
+            if op_k == ">=" and n_q >= n_k:
+                if best_thresh is None or n_k > best_thresh:
+                    best = v
+                    best_thresh = n_k
+        if best is not None:
+            return best
+
+    return None
+
+# -------------------------
+# CTCAE v5.0-like numeric grading (LLN-based for cytopenias)
+# Note: Some CTCAE Grade 4 definitions are clinical; numeric surrogates are used here where standard.
+# -------------------------
+ctcae_criteria = {
+    "Anemia": {
+        # Grade 1 requires Hgb < LLN; numeric band is <LLN to 10.0
+        "Grade 1": {"Hemoglobin": {"lt_lln_required": True, "min": 10.0, "max": None}},
+        "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},   # <10 to 8
+        "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},  # <8
+        # Grade 4 anemia is clinical (life-threatening); not solely numeric in CTCAE table.
+    },
+    "Thrombocytopenia": {
+        "Grade 1": {"Platelet": {"lt_lln_required": True, "min": 75000, "max": None}},  # <LLN to 75k
+        "Grade 2": {"Platelet": {"min": 50000, "max": 74999}},
+        "Grade 3": {"Platelet": {"min": 25000, "max": 49999}},
+        "Grade 4": {"Platelet": {"min": 0, "max": 24999}},
+    },
+    "Leukopenia": {
+        "Grade 1": {"WBC": {"lt_lln_required": True, "min": 3000, "max": None}},  # <LLN to 3000
+        "Grade 2": {"WBC": {"min": 2000, "max": 2999}},
+        "Grade 3": {"WBC": {"min": 1000, "max": 1999}},
+        "Grade 4": {"WBC": {"min": 0, "max": 999}},
+    },
+    "Neutropenia": {
+        "Grade 1": {"ANC": {"lt_lln_required": True, "min": 1500, "max": None}},  # <LLN to 1500
+        "Grade 2": {"ANC": {"min": 1000, "max": 1499}},
+        "Grade 3": {"ANC": {"min": 500, "max": 999}},
+        "Grade 4": {"ANC": {"min": 0, "max": 499}},
+    },
+}
+
+def determine_ctcae_grade(parameter: str, value, lln_map=None):
+    """Determine CTCAE grade for a parameter using numeric criteria + LLN gating when required."""
+    if value is None:
+        return None
+    if parameter not in ctcae_criteria:
+        return None
+
+    grade_hits = []
+    grade_order = ["Grade 1", "Grade 2", "Grade 3", "Grade 4"]
+
+    for grade, limits in ctcae_criteria[parameter].items():
+        for lab, t in limits.items():
+            # LLN gating
+            if t.get("lt_lln_required"):
+                if not lln_map or lab not in lln_map or lln_map[lab] is None:
+                    continue
+                if value >= lln_map[lab]:
+                    continue
+
+            min_ok = True if t.get("min") is None else (value >= t["min"])
+            max_ok = True if t.get("max") is None else (value <= t["max"])
+            if min_ok and max_ok:
+                grade_hits.append(grade)
+
+    # highest severity
+    for g in reversed(grade_order):
+        if g in grade_hits:
+            return g
+    return None
+
+def ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr):
+    """
+    CTCAE Creatinine Increased is ULN/baseline-dependent.
+    This function provides a commonly used numeric implementation:
+      - If baseline <= ULN: grade based on multiples of ULN
+      - If baseline > ULN: grade based on multiples of baseline
+    Returns "Grade 1".."Grade 4" or None.
+    """
+    if current_cr is None or uln_cr is None or uln_cr <= 0:
+        return None
+    base = baseline_cr if baseline_cr is not None else None
+
+    # choose reference
+    if base is None or base <= uln_cr:
+        ref = uln_cr
+    else:
+        ref = base
+
+    ratio = current_cr / ref if ref > 0 else None
+    if ratio is None:
+        return None
+
+    # Common CTCAE cutpoints:
+    # Grade 1: >ULN to 1.5x (or >1.0 to 1.5)
+    # Grade 2: >1.5 to 3.0
+    # Grade 3: >3.0 to 6.0
+    # Grade 4: >6.0
+    if ratio > 6.0:
+        return "Grade 4"
+    if ratio > 3.0:
+        return "Grade 3"
+    if ratio > 1.5:
+        return "Grade 2"
+    if ratio > 1.0:
+        return "Grade 1"
+    return None
+
+# -------------------------
+# FDA-label-inspired dose modification guidance (high-level; verify with current label)
+# -------------------------
+dose_modifications = {
+    "LUTATHERA": {
+        "Thrombocytopenia": {
+            "Grade 2": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 3": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 4": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent Grade ≥ 2": "Permanently discontinue LUTATHERA.",
+        },
+        "Anemia": {
+            "Grade 3": "Withhold dose until resolution to Grade 0–2. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 3–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 4": "Withhold dose until resolution to Grade 0–2. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 3–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent Grade ≥ 3": "Permanently discontinue LUTATHERA.",
+        },
+        "Neutropenia": {
+            "Grade 3": "Withhold dose until resolution to Grade 0–2. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 3–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 4": "Withhold dose until resolution to Grade 0–2. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 3–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent Grade ≥ 3": "Permanently discontinue LUTATHERA.",
+        },
+        "Leukopenia": {
+            "Grade 2": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 3": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Grade 4": "Withhold dose until resolution to Grade 0–1. Resume at 3.7 GBq if resolved. If no recurrence, may return to 7.4 GBq. Recurrent Grade 2–4: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent Grade ≥ 2": "Permanently discontinue LUTATHERA.",
+        },
+        "Renal Toxicity": {
+            "CLcr < 40 mL/min": "Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved. Recurrent renal toxicity: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "≥40% increase from baseline creatinine": "Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved. Recurrent renal toxicity: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "≥40% decrease from baseline CLcr": "Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved. Recurrent renal toxicity: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent renal toxicity": "Permanently discontinue LUTATHERA.",
+        },
+        "Hepatotoxicity": {
+            "Bilirubin > 3x ULN": "Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved. Recurrent hepatotoxicity: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Albumin < 30 g/L with INR > 1.5": "Withhold dose until resolution or return to baseline. Resume at 3.7 GBq if resolved. Recurrent hepatotoxicity: permanently discontinue. If dose delayed >16 weeks due to toxicity: permanently discontinue.",
+            "Recurrent hepatotoxicity": "Permanently discontinue LUTATHERA.",
+        },
+    },
+    "PLUVICTO": {
+        "Myelosuppression": {
+            "Grade 2": "Withhold PLUVICTO until improvement to Grade 1 or baseline.",
+            "Grade ≥ 3": "Withhold PLUVICTO until improvement to Grade 1 or baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).",
+            "Recurrent Grade ≥ 3 after one dose reduction": "Permanently discontinue PLUVICTO.",
+        },
+        "Renal Toxicity": {
+            "Confirmed creatinine Grade ≥ 2 OR CLcr < 30": "Withhold PLUVICTO until improvement.",
+            "≥40% creatinine increase AND >40% CLcr decrease": "Withhold PLUVICTO until improvement or return to baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).",
+            "Grade ≥ 3 renal toxicity": "Permanently discontinue PLUVICTO.",
+            "Recurrent renal toxicity after one dose reduction": "Permanently discontinue PLUVICTO.",
+        },
+        "Dry Mouth": {
+            "Grade 2": "Withhold PLUVICTO until improvement or return to baseline. Consider reducing dose by 20% to 5.9 GBq (160 mCi).",
+            "Grade 3": "Withhold PLUVICTO until improvement or return to baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).",
+            "Recurrent Grade 3 after one dose reduction": "Permanently discontinue PLUVICTO.",
+        },
+        "Gastrointestinal toxicity": {
+            "Grade ≥ 3 (not amenable to medical intervention)": "Withhold PLUVICTO until improvement to Grade 2 or baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).",
+            "Recurrent Grade ≥ 3 after one dose reduction": "Permanently discontinue PLUVICTO.",
+        },
+        "Fatigue": {
+            "Grade ≥ 3": "Withhold PLUVICTO until improvement to Grade 2 or baseline.",
+        },
+        "Electrolyte or metabolic abnormalities": {
+            "Grade ≥ 2": "Withhold PLUVICTO until improvement to Grade 1 or baseline.",
+        },
+        "Treatment delay > 4 weeks": {
+            "Any": "Permanently discontinue PLUVICTO.",
+        },
+        "Other non-hematologic toxicity": {
+            "Any recurrent Grade 3 or 4 OR persistent/intolerable Grade 2 after one dose reduction": "Permanently discontinue PLUVICTO.",
+        },
+        "Any unacceptable toxicity": {
+            "Any": "Permanently discontinue PLUVICTO.",
+        },
+    },
+}
+
+# -------------------------
+# Toxicity assessment functions
+# -------------------------
+def assess_lutathera_renal(baseline_cr, current_cr, baseline_clcr, current_clcr):
+    """
+    LUTATHERA label-trigger style:
+      - CLcr < 40 mL/min
+      - ≥40% increase from baseline creatinine
+      - ≥40% decrease from baseline CLcr
+    """
+    issues = []
+
+    if current_clcr is not None and current_clcr < 40:
+        issues.append("CLcr < 40 mL/min")
+
+    if baseline_cr is not None and current_cr is not None and baseline_cr > 0:
+        if (current_cr / baseline_cr) >= 1.4:
+            issues.append("≥40% increase from baseline creatinine")
+
+    if baseline_clcr is not None and current_clcr is not None and baseline_clcr > 0:
+        frac_decrease = (baseline_clcr - current_clcr) / baseline_clcr
+        if frac_decrease >= 0.40:
+            issues.append("≥40% decrease from baseline CLcr")
+
+    return issues
+
+def assess_pluvicto_renal(baseline_cr, current_cr, uln_cr, baseline_clcr, current_clcr):
+    """
+    PLUVICTO label-trigger style:
+      - Confirmed creatinine Grade ≥ 2 OR CLcr < 30
+      - ≥40% creatinine increase AND >40% CLcr decrease (dose reduction trigger)
+      - Grade ≥ 3 renal toxicity -> discontinue (handled via creatinine grade if available)
+    """
+    issues = []
+    cr_grade = ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr)
+    op, n = normalize_grade_string(cr_grade) if cr_grade else (None, None)
+
+    # Primary hold triggers
+    if current_clcr is not None and current_clcr < 30:
+        issues.append("Confirmed creatinine Grade ≥ 2 OR CLcr < 30")
+    elif n is not None and n >= 2:
+        issues.append("Confirmed creatinine Grade ≥ 2 OR CLcr < 30")
+
+    # Dose reduction combo trigger
+    if baseline_cr is not None and current_cr is not None and baseline_cr > 0:
+        cr_increase = current_cr / baseline_cr
+        if cr_increase >= 1.4:
+            if baseline_clcr is not None and current_clcr is not None and baseline_clcr > 0:
+                clcr_decrease = (baseline_clcr - current_clcr) / baseline_clcr
+                if clcr_decrease > 0.40:
+                    issues.append("≥40% creatinine increase AND >40% CLcr decrease")
+
+    # Discontinue trigger for Grade ≥ 3 renal toxicity
+    if n is not None and n >= 3:
+        issues.append("Grade ≥ 3 renal toxicity")
+
+    return issues, cr_grade
+
+def assess_lutathera_hepatic(bilirubin, uln_bilirubin, albumin_g_l, inr):
+    issues = []
+    if bilirubin is not None and uln_bilirubin is not None and uln_bilirubin > 0:
+        if bilirubin > 3.0 * uln_bilirubin:
             issues.append("Bilirubin > 3x ULN")
-        
-        if albumin is not None and inr is not None:
-            if albumin < 30 and inr > 1.5:
-                issues.append("Albumin < 30 g/L with INR > 1.5")
-        
-        return issues
+    if albumin_g_l is not None and inr is not None:
+        if albumin_g_l < 30 and inr > 1.5:
+            issues.append("Albumin < 30 g/L with INR > 1.5")
+    return issues
 
-    # Streamlit app layout
-    st.title("🩺 REACT: Radiotheranostic Evaluation & Assessment for Clinical Toxicity")
-    st.markdown("**Based on CTCAE v5.0 and FDA Prescribing Information**")
-    
-    st.info("📋 This tool evaluates laboratory values against CTCAE criteria and provides dose modification guidance for LUTATHERA and PLUVICTO based on official prescribing information.")
+def grade_to_num(grade_str):
+    op, n = normalize_grade_string(grade_str)
+    return n
 
-    # Drug selection
-    drug = st.selectbox("**Select Radionuclide Therapy**", options=['LUTATHERA', 'PLUVICTO'], key="drug_selection")
+# -------------------------
+# UI
+# -------------------------
+st.title("🩺 REACT: Radiotheranostic Evaluation & Assessment for Clinical Toxicity")
+st.markdown("**CTCAE v5.0 grading + FDA label-inspired dose modification guidance (educational)**")
 
+drug = st.selectbox("**Select Radionuclide Therapy**", options=["LUTATHERA", "PLUVICTO"], key="drug_selection")
+
+st.markdown("---")
+st.subheader("📊 Laboratory Values (enter blanks if not available)")
+
+colA, colB = st.columns(2)
+
+with colA:
+    st.markdown("### Hematology")
+    hgb_txt = st.text_input("Hemoglobin (g/dL)", value="", placeholder="e.g., 10.8")
+    plt_txt = st.text_input("Platelets (/mm³)", value="", placeholder="e.g., 125000")
+    wbc_txt = st.text_input("WBC (/mm³)", value="", placeholder="e.g., 4200")
+    anc_txt = st.text_input("ANC (/mm³)", value="", placeholder="e.g., 1800")
+
+with colB:
+    st.markdown("### Renal")
+    baseline_cr_txt = st.text_input("Baseline Creatinine (mg/dL)", value="", placeholder="e.g., 1.0")
+    current_cr_txt = st.text_input("Current Creatinine (mg/dL)", value="", placeholder="e.g., 1.5")
+    uln_cr_txt = st.text_input("ULN Creatinine (mg/dL)", value="1.2", placeholder="e.g., 1.2")
+    baseline_clcr_txt = st.text_input("Baseline Creatinine Clearance (mL/min)", value="", placeholder="e.g., 85")
+    current_clcr_txt = st.text_input("Current Creatinine Clearance (mL/min)", value="", placeholder="e.g., 55")
+
+st.markdown("### Reference Ranges (LLN for CTCAE Grade 1 cytopenias)")
+colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
+with colLLN1:
+    hgb_lln_txt = st.text_input("Hgb LLN (g/dL)", value="12.0")
+with colLLN2:
+    plt_lln_txt = st.text_input("Platelet LLN (/mm³)", value="150000")
+with colLLN3:
+    wbc_lln_txt = st.text_input("WBC LLN (/mm³)", value="4000")
+with colLLN4:
+    anc_lln_txt = st.text_input("ANC LLN (/mm³)", value="1500")
+
+st.markdown("### Hepatic")
+colH1, colH2 = st.columns(2)
+with colH1:
+    bili_txt = st.text_input("Total Bilirubin (mg/dL)", value="", placeholder="e.g., 1.1")
+    uln_bili_txt = st.text_input("ULN Bilirubin (mg/dL)", value="1.0", placeholder="e.g., 1.0")
+with colH2:
+    alb_txt = st.text_input("Albumin (g/L)", value="", placeholder="e.g., 38")
+    inr_txt = st.text_input("INR", value="", placeholder="e.g., 1.1")
+
+# PLUVICTO additional fields
+pluvicto_extras = {}
+if drug == "PLUVICTO":
     st.markdown("---")
-    st.subheader("📊 Laboratory Values")
+    st.subheader("🧩 PLUVICTO Additional Assessments (optional)")
+    colP1, colP2, colP3 = st.columns(3)
+    with colP1:
+        pluvicto_extras["dry_mouth_grade"] = st.selectbox("Dry Mouth Grade", options=[None, 1, 2, 3], index=0)
+        pluvicto_extras["fatigue_grade"] = st.selectbox("Fatigue Grade", options=[None, 1, 2, 3, 4], index=0)
+    with colP2:
+        pluvicto_extras["gi_grade"] = st.selectbox("GI Toxicity Grade", options=[None, 1, 2, 3, 4], index=0)
+        pluvicto_extras["gi_amenable"] = st.selectbox("GI toxicity amenable to medical intervention?", options=["Yes", "No"], index=0)
+    with colP3:
+        pluvicto_extras["electrolyte_grade"] = st.selectbox("Electrolyte/Metabolic Abnormality Grade", options=[None, 1, 2, 3, 4], index=0)
+        pluvicto_extras["treatment_delay_weeks"] = st.text_input("Treatment delay (weeks) due to toxicity", value="", placeholder="e.g., 0")
 
-    # Create columns for better layout
-    col1, col2 = st.columns(2)
+# LUTATHERA delay helper (optional)
+lutathera_delay_weeks_txt = ""
+if drug == "LUTATHERA":
+    st.markdown("---")
+    st.subheader("🧩 LUTATHERA Timing (optional)")
+    lutathera_delay_weeks_txt = st.text_input(
+        "Dose delay (weeks) due to toxicity (if applicable)",
+        value="",
+        placeholder="e.g., 0"
+    )
 
-    with col1:
-        st.markdown("**Hematology**")
-        hemoglobin = st.number_input("Hemoglobin (g/dL)", min_value=0.0, value=None, step=0.1, key="hgb")
-        platelet = st.number_input("Platelet Count (/mm³)", min_value=0, value=None, step=1000, key="plt")
-        wbc = st.number_input("WBC Count (/mm³)", min_value=0, value=None, step=100, key="wbc")
-        anc = st.number_input("ANC (/mm³)", min_value=0, value=None, step=100, key="anc")
+st.markdown("---")
 
-    with col2:
-        st.markdown("**Renal Function**")
-        baseline_creatinine = st.number_input("Baseline Creatinine (mg/dL)", min_value=0.0, value=None, step=0.1, key="baseline_cr")
-        current_creatinine = st.number_input("Current Creatinine (mg/dL)", min_value=0.0, value=None, step=0.1, key="current_cr")
-        baseline_clcr = st.number_input("Baseline Creatinine Clearance (mL/min)", min_value=0.0, value=None, step=1.0, key="baseline_clcr")
-        current_clcr = st.number_input("Current Creatinine Clearance (mL/min)", min_value=0.0, value=None, step=1.0, key="current_clcr")
+# -------------------------
+# Analyze
+# -------------------------
+if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
+    # Parse values
+    hemoglobin = parse_float(hgb_txt)
+    platelet = parse_int(plt_txt)
+    wbc = parse_int(wbc_txt)
+    anc = parse_int(anc_txt)
 
-    # Hepatic function
-    st.markdown("**Hepatic Function**")
-    col3, col4 = st.columns(2)
-    with col3:
-        bilirubin = st.number_input("Total Bilirubin (mg/dL)", min_value=0.0, value=None, step=0.1, key="bili")
-        uln_bilirubin = st.number_input("ULN Bilirubin (mg/dL)", min_value=0.0, value=1.0, step=0.1, key="uln_bili")
-    with col4:
-        albumin = st.number_input("Albumin (g/L)", min_value=0.0, value=None, step=1.0, key="alb")
-        inr = st.number_input("INR", min_value=0.0, value=None, step=0.1, key="inr")
+    baseline_creatinine = parse_float(baseline_cr_txt)
+    current_creatinine = parse_float(current_cr_txt)
+    uln_creatinine = parse_float(uln_cr_txt)
+    baseline_clcr = parse_float(baseline_clcr_txt)
+    current_clcr = parse_float(current_clcr_txt)
 
-    # Additional fields for PLUVICTO
+    bilirubin = parse_float(bili_txt)
+    uln_bilirubin = parse_float(uln_bili_txt)
+    albumin = parse_float(alb_txt)
+    inr = parse_float(inr_txt)
+
+    hgb_lln = parse_float(hgb_lln_txt)
+    plt_lln = parse_int(plt_lln_txt)
+    wbc_lln = parse_int(wbc_lln_txt)
+    anc_lln = parse_int(anc_lln_txt)
+
+    lln_map = {"Hemoglobin": hgb_lln, "Platelet": plt_lln, "WBC": wbc_lln, "ANC": anc_lln}
+
+    # Determine if anything entered
+    has_values = any([
+        hemoglobin is not None, platelet is not None, wbc is not None, anc is not None,
+        current_creatinine is not None, current_clcr is not None,
+        bilirubin is not None, albumin is not None, inr is not None
+    ])
     if drug == "PLUVICTO":
-        st.markdown("**Additional Assessments for PLUVICTO**")
-        col5, col6 = st.columns(2)
-        
-        with col5:
-            dry_mouth_grade = st.selectbox(
-                "Dry Mouth Grade",
-                options=[None, 1, 2, 3],
-                format_func=lambda x: (
-                    "Select Grade" if x is None
-                    else f"Grade {x}: " + {
-                        1: "Symptomatic without significant dietary alteration; unstimulated saliva flow >0.2 ml/min",
-                        2: "Moderate symptoms; oral intake alterations; unstimulated saliva 0.1 to 0.2 ml/min", 
-                        3: "Inability to adequately aliment orally; unstimulated saliva <0.1 ml/min"
-                    }.get(x, "")
-                ),
-                key="dry_mouth"
-            )
-        
-        with col6:
-            fatigue_grade = st.selectbox(
-                "Fatigue Grade",
-                options=[None, 1, 2, 3, 4],
-                format_func=lambda x: (
-                    "Select Grade" if x is None
-                    else f"Grade {x}: " + {
-                        1: "Fatigue relieved by rest",
-                        2: "Fatigue not relieved by rest; limiting instrumental ADL",
-                        3: "Fatigue not relieved by rest; limiting self care ADL",
-                        4: "Life-threatening consequences"
-                    }.get(x, "")
-                ),
-                key="fatigue"
-            )
-
-        # Liver function for PLUVICTO
-        col7, col8 = st.columns(2)
-        with col7:
-            ast = st.number_input("AST (U/L)", min_value=0.0, value=None, step=1.0, key="ast")
-            uln_ast = st.number_input("ULN AST (U/L)", min_value=0.0, value=35.0, step=1.0, key="uln_ast")
-        with col8:
-            alt = st.number_input("ALT (U/L)", min_value=0.0, value=None, step=1.0, key="alt")
-            liver_mets = st.selectbox("Liver Metastases Present?", options=["No", "Yes"], key="liver_mets")
-
-    st.markdown("---")
-
-    # Analysis button
-    if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
-        
-        # Check if any values were entered
-        has_values = any([
-            hemoglobin, platelet, wbc, anc, current_creatinine, current_clcr,
-            bilirubin, albumin, inr
+        has_values = has_values or any([
+            pluvicto_extras.get("dry_mouth_grade") is not None,
+            pluvicto_extras.get("fatigue_grade") is not None,
+            pluvicto_extras.get("gi_grade") is not None,
+            pluvicto_extras.get("electrolyte_grade") is not None,
+            parse_float(pluvicto_extras.get("treatment_delay_weeks", "")) not in (None, 0.0),
         ])
-        
-        if drug == "PLUVICTO":
-            has_values = has_values or any([dry_mouth_grade, fatigue_grade, ast, alt])
-        
-        if not has_values:
-            st.error("⚠️ Please enter at least one laboratory value to analyze.")
-        else:
-            # Analyze each parameter
-            detected_issues = []
-            
-            # Hematology assessment
-            if hemoglobin is not None:
-                grade = determine_ctcae_grade('Anemia', hemoglobin)
-                if grade:
-                    detected_issues.append(('Anemia', grade, hemoglobin))
-            
-            if platelet is not None:
-                grade = determine_ctcae_grade('Thrombocytopenia', platelet)
-                if grade:
-                    detected_issues.append(('Thrombocytopenia', grade, platelet))
-            
-            if wbc is not None:
-                grade = determine_ctcae_grade('Leukopenia', wbc)
-                if grade:
-                    detected_issues.append(('Leukopenia', grade, wbc))
-            
-            if anc is not None:
-                grade = determine_ctcae_grade('Neutropenia', anc)
-                if grade:
-                    detected_issues.append(('Neutropenia', grade, anc))
-            
-            # Renal assessment
-            renal_issues = assess_renal_function(baseline_creatinine, current_creatinine, baseline_clcr, current_clcr)
-            for issue in renal_issues:
-                detected_issues.append(('Renal Toxicity', issue, None))
-            
-            # Hepatic assessment
-            hepatic_issues = assess_hepatotoxicity(bilirubin, albumin, inr, uln_bilirubin)
-            for issue in hepatic_issues:
-                detected_issues.append(('Hepatotoxicity', issue, None))
-            
-            # PLUVICTO-specific assessments
-            if drug == "PLUVICTO":
-                if dry_mouth_grade is not None and dry_mouth_grade >= 2:
-                    detected_issues.append(('Dry Mouth', f'Grade {dry_mouth_grade}', None))
-                
-                if fatigue_grade is not None and fatigue_grade >= 3:
-                    detected_issues.append(('Fatigue', f'Grade ≥ 3', None))
-                
-                if ast is not None and liver_mets == "No" and ast > 5 * uln_ast:
-                    detected_issues.append(('AST/ALT Elevation', 'AST or ALT > 5x ULN without liver metastases', None))
-                
-                if alt is not None and liver_mets == "No" and alt > 5 * uln_ast:
-                    detected_issues.append(('AST/ALT Elevation', 'AST or ALT > 5x ULN without liver metastases', None))
-            
-            # Group by myelosuppression for PLUVICTO
-            if drug == "PLUVICTO":
-                myelo_issues = []
-                for issue_type, grade_info, value in detected_issues[:]:
-                    if issue_type in ['Anemia', 'Thrombocytopenia', 'Leukopenia', 'Neutropenia']:
-                        myelo_issues.append((issue_type, grade_info, value))
-                        detected_issues.remove((issue_type, grade_info, value))
-                
-                if myelo_issues:
-                    # Find highest grade
-                    highest_grade = 0
-                    for _, grade_info, _ in myelo_issues:
-                        if 'Grade' in grade_info:
-                            grade_num = int(grade_info.split()[1])
-                            highest_grade = max(highest_grade, grade_num)
-                    
-                    if highest_grade >= 2:
-                        detected_issues.append(('Myelosuppression', f'Grade {highest_grade}', myelo_issues))
+    if drug == "LUTATHERA":
+        has_values = has_values or (parse_float(lutathera_delay_weeks_txt) not in (None, 0.0))
 
-            # Display results
-            if detected_issues:
-                st.success(f"✅ **Analysis Complete**: Found {len(detected_issues)} issue(s) requiring dose modification review")
-                
-                st.markdown("---")
-                st.subheader("📋 **Dose Modification Recommendations**")
-                
-                for i, (issue_type, grade_or_condition, details) in enumerate(detected_issues, 1):
-                    with st.expander(f"**{i}. {issue_type}: {grade_or_condition}**", expanded=True):
-                        
-                        # Get dose modification guidance
-                        guidance = None
-                        drug_modifications = dose_modifications.get(drug, {})
-                        
-                        if issue_type in drug_modifications:
-                            type_modifications = drug_modifications[issue_type]
-                            
-                            # Try exact match first
-                            if grade_or_condition in type_modifications:
-                                guidance = type_modifications[grade_or_condition]
+    if not has_values:
+        st.error("⚠️ Please enter at least one value to analyze.")
+        st.stop()
+
+    detected_issues = []
+    supporting = []
+
+    # Hematology grading
+    if hemoglobin is not None:
+        g = determine_ctcae_grade("Anemia", hemoglobin, lln_map)
+        if g:
+            supporting.append(("Anemia", g, hemoglobin))
+    if platelet is not None:
+        g = determine_ctcae_grade("Thrombocytopenia", platelet, lln_map)
+        if g:
+            supporting.append(("Thrombocytopenia", g, platelet))
+    if wbc is not None:
+        g = determine_ctcae_grade("Leukopenia", wbc, lln_map)
+        if g:
+            supporting.append(("Leukopenia", g, wbc))
+    if anc is not None:
+        g = determine_ctcae_grade("Neutropenia", anc, lln_map)
+        if g:
+            supporting.append(("Neutropenia", g, anc))
+
+    # Renal assessment
+    cr_ctcae_grade = None
+    if drug == "LUTATHERA":
+        renal_issues = assess_lutathera_renal(baseline_creatinine, current_creatinine, baseline_clcr, current_clcr)
+        for issue in renal_issues:
+            detected_issues.append(("Renal Toxicity", issue, None))
+
+    if drug == "PLUVICTO":
+        renal_issues, cr_ctcae_grade = assess_pluvicto_renal(
+            baseline_creatinine, current_creatinine, uln_creatinine, baseline_clcr, current_clcr
+        )
+        for issue in renal_issues:
+            detected_issues.append(("Renal Toxicity", issue, cr_ctcae_grade))
+
+    # Hepatic assessment (used primarily for LUTATHERA triggers included in this tool)
+    hepatic_issues = assess_lutathera_hepatic(bilirubin, uln_bilirubin, albumin, inr)
+    for issue in hepatic_issues:
+        detected_issues.append(("Hepatotoxicity", issue, None))
+
+    # PLUVICTO-specific assessments
+    if drug == "PLUVICTO":
+        dry = pluvicto_extras.get("dry_mouth_grade")
+        if dry is not None and dry >= 2:
+            detected_issues.append(("Dry Mouth", f"Grade {dry}", None))
+
+        fatigue = pluvicto_extras.get("fatigue_grade")
+        if fatigue is not None and fatigue >= 3:
+            detected_issues.append(("Fatigue", "Grade ≥ 3", None))
+
+        gi = pluvicto_extras.get("gi_grade")
+        gi_amenable = pluvicto_extras.get("gi_amenable")
+        if gi is not None and gi >= 3 and gi_amenable == "No":
+            detected_issues.append(("Gastrointestinal toxicity", "Grade ≥ 3 (not amenable to medical intervention)", None))
+
+        elec = pluvicto_extras.get("electrolyte_grade")
+        if elec is not None and elec >= 2:
+            detected_issues.append(("Electrolyte or metabolic abnormalities", "Grade ≥ 2", None))
+
+        delay_weeks = parse_float(pluvicto_extras.get("treatment_delay_weeks", ""))
+        if delay_weeks is not None and delay_weeks > 4:
+            detected_issues.append(("Treatment delay > 4 weeks", "Any", delay_weeks))
+
+    # LUTATHERA delay >16 weeks note (optional)
+    if drug == "LUTATHERA":
+        delay_weeks = parse_float(lutathera_delay_weeks_txt)
+        if delay_weeks is not None and delay_weeks > 16:
+            detected_issues.append(("Dose delayed > 16 weeks", "Any", delay_weeks))
+
+    # PLUVICTO: group myelosuppression from cytopenias
+    if drug == "PLUVICTO" and supporting:
+        heme_grades = []
+        for tox, g, v in supporting:
+            n = grade_to_num(g)
+            if n is not None:
+                heme_grades.append(n)
+        if heme_grades:
+            highest = max(heme_grades)
+            if highest >= 2:
+                # Remove individual heme issues from detected_issues (we didn't add them yet)
+                detected_issues.append(("Myelosuppression", f"Grade {highest}" if highest < 3 else "Grade ≥ 3", supporting))
+
+    # LUTATHERA: add individual heme issues (label is per-toxicity category)
+    if drug == "LUTATHERA":
+        for tox, g, v in supporting:
+            # Only include grades that actually trigger LUTATHERA modifications:
+            # - Thrombocytopenia: Grade 2–4
+            # - Anemia: Grade 3–4
+            # - Neutropenia: Grade 3–4
+            # - Leukopenia: Grade 2–4 (some sites choose to track; included here)
+            n = grade_to_num(g)
+            if tox == "Thrombocytopenia" and n is not None and n >= 2:
+                detected_issues.append(("Thrombocytopenia", g, [("Platelets", g, v)]))
+            if tox == "Anemia" and n is not None and n >= 3:
+                detected_issues.append(("Anemia", g, [("Hemoglobin", g, v)]))
+            if tox == "Neutropenia" and n is not None and n >= 3:
+                detected_issues.append(("Neutropenia", g, [("ANC", g, v)]))
+            if tox == "Leukopenia" and n is not None and n >= 2:
+                detected_issues.append(("Leukopenia", g, [("WBC", g, v)]))
+
+    # -------------------------
+    # Display results
+    # -------------------------
+    if detected_issues:
+        st.success(f"✅ **Analysis Complete**: Found {len(detected_issues)} issue(s) to review")
+
+        st.markdown("---")
+        st.subheader("📋 Dose Modification Recommendations (educational)")
+
+        drug_modifications = dose_modifications.get(drug, {})
+
+        for i, (issue_type, grade_or_condition, details) in enumerate(detected_issues, 1):
+            title = f"**{i}. {issue_type}: {grade_or_condition}**"
+            with st.expander(title, expanded=True):
+                guidance = None
+
+                # Normalize LUTATHERA labeling: issue_type keys are the toxicity names
+                # For renal/hepatic we stored as "Renal Toxicity"/"Hepatotoxicity" and use those keys
+                lookup_type = issue_type
+
+                # Map "Dose delayed > 16 weeks" into LUTATHERA-level discontinuation note
+                if drug == "LUTATHERA" and issue_type == "Dose delayed > 16 weeks":
+                    st.error("⛔ **Dose delay >16 weeks due to toxicity** is a discontinuation criterion in LUTATHERA dose-mod tables.")
+                    if details is not None:
+                        st.markdown(f"**Entered delay (weeks):** {details}")
+                    continue
+
+                if lookup_type in drug_modifications:
+                    guidance = pick_guidance(drug_modifications[lookup_type], grade_or_condition)
+
+                if guidance:
+                    st.markdown(f"**📝 Recommendation:** {guidance}")
+                else:
+                    st.warning("⚠️ No specific dose modification guidance matched. Verify in the current FDA label.")
+
+                # Supporting info
+                if details is not None:
+                    if isinstance(details, list):
+                        st.markdown("**Supporting Data:**")
+                        for a, b, c in details:
+                            if c is not None:
+                                st.markdown(f"• {a}: {c} ({b})")
                             else:
-                                # Try partial matches
-                                for key, value in type_modifications.items():
-                                    if grade_or_condition in key or any(term in grade_or_condition for term in key.split()):
-                                        guidance = value
-                                        break
-                        
-                        if guidance:
-                            st.markdown(f"**📝 Recommendation:** {guidance}")
-                        else:
-                            st.warning("⚠️ No specific dose modification guidance found. Consult prescribing information.")
-                        
-                        # Show supporting data
-                        if details and isinstance(details, list):
-                            st.markdown("**Supporting Laboratory Values:**")
-                            for detail_type, detail_grade, detail_value in details:
-                                if detail_value is not None:
-                                    st.markdown(f"• {detail_type}: {detail_value} ({detail_grade})")
-                                else:
-                                    st.markdown(f"• {detail_type}: {detail_grade}")
-                        elif details is not None:
-                            st.markdown(f"**Value:** {details}")
-                
-                # Additional notes
-                st.markdown("---")
-                st.info("ℹ️ **Important Notes:**\n"
-                       "• These recommendations are based on FDA prescribing information\n" 
-                       "• Consider patient's overall clinical condition\n"
-                       "• Monitor closely and reassess before each dose\n"
-                       "• Consult full prescribing information for complete guidance")
-                
-            else:
-                st.success("✅ **No adverse events requiring dose modification detected** based on the entered laboratory values.")
-                st.info("Continue monitoring per standard protocols and reassess before next dose.")
+                                st.markdown(f"• {a}: {b}")
+                    else:
+                        st.markdown(f"**Value/Detail:** {details}")
 
-    # Footer
-    st.markdown("---")
-    st.markdown("*Based on CTCAE v5.0 and current FDA prescribing information for LUTATHERA and PLUVICTO*")
-    st.caption("⚠️ This tool is for educational purposes only and does not replace clinical judgment.")
+        st.markdown("---")
+        st.info(
+            "ℹ️ **Important Notes**\n"
+            "• Recommendations are educational and must be verified against the current FDA prescribing information.\n"
+            "• CTCAE grading may require clinical context (symptoms, transfusion indicated, life-threatening criteria).\n"
+            "• Reassess prior to each cycle and integrate the patient’s overall condition."
+        )
+    else:
+        st.success("✅ **No dose-modification triggers detected** from the values entered (per this tool’s rules).")
+        st.info("Continue standard monitoring and reassess before the next cycle.")
+
+# Footer
+st.markdown("---")
+st.caption("⚠️ Educational tool. Does not replace clinical judgment or official prescribing information.")
