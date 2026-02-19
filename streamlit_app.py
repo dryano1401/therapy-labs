@@ -44,16 +44,6 @@ def parse_float(text: str):
     except ValueError:
         return None
 
-def parse_int(text: str):
-    """Parse user text to int; empty/invalid -> None."""
-    v = parse_float(text)
-    if v is None:
-        return None
-    try:
-        return int(round(v))
-    except Exception:
-        return None
-
 def normalize_grade_string(s: str):
     """
     Extract (op, n) from strings like:
@@ -64,7 +54,6 @@ def normalize_grade_string(s: str):
         return None, None
     s = str(s)
 
-    # If range like "Grade 3-4", treat as Grade 3 for thresholding purposes
     m_range = re.search(r"Grade\s*(\d+)\s*-\s*(\d+)", s)
     if m_range:
         return ">=", int(m_range.group(1))
@@ -84,14 +73,12 @@ def pick_guidance(type_modifications: dict, grade_or_condition: str):
     if not type_modifications:
         return None
 
-    # exact key match
     if grade_or_condition in type_modifications:
         return type_modifications[grade_or_condition]
 
-    # grade-aware threshold match
     op_q, n_q = normalize_grade_string(grade_or_condition)
     if n_q is not None:
-        # First pass: non-recurrent keys
+        # Non-recurrent first
         best = None
         best_thresh = None
         for k, v in type_modifications.items():
@@ -103,14 +90,13 @@ def pick_guidance(type_modifications: dict, grade_or_condition: str):
             if op_k == "=" and n_q == n_k:
                 return v
             if op_k == ">=" and n_q >= n_k:
-                # choose the highest threshold that is still <= n_q
                 if best_thresh is None or n_k > best_thresh:
                     best = v
                     best_thresh = n_k
         if best is not None:
             return best
 
-        # Second pass: recurrent keys
+        # Recurrent second
         best = None
         best_thresh = None
         for k, v in type_modifications.items():
@@ -127,16 +113,67 @@ def pick_guidance(type_modifications: dict, grade_or_condition: str):
     return None
 
 # -------------------------
+# Unit normalization (to CTCAE units)
+# CTCAE thresholds here are implemented in:
+#   - Platelets: /mm^3 (same as /uL) numeric thresholds like 75,000
+#   - WBC: /mm^3 numeric thresholds like 3,000
+#   - ANC: /mm^3 numeric thresholds like 1,500
+#
+# Many clinical workflows enter:
+#   - Platelets as K/uL (e.g., 100)
+#   - WBC as K/uL (e.g., 2.0)
+#   - ANC as K/uL (e.g., 4.0)
+#
+# We'll let the user choose their input unit system and normalize internally.
+# -------------------------
+def to_cells_per_uL_from_k(value_k):
+    """Convert K/uL to /uL."""
+    if value_k is None:
+        return None
+    return float(value_k) * 1000.0
+
+def normalize_platelets(value, unit_mode: str):
+    """
+    unit_mode:
+      - "K/uL" expects values like 100 (meaning 100,000/uL)
+      - "/uL" expects values like 100000
+    """
+    if value is None:
+        return None
+    if unit_mode == "K/uL":
+        return to_cells_per_uL_from_k(value)
+    return float(value)
+
+def normalize_wbc(value, unit_mode: str):
+    if value is None:
+        return None
+    if unit_mode == "K/uL":
+        return to_cells_per_uL_from_k(value)
+    return float(value)
+
+def normalize_anc(value, unit_mode: str):
+    if value is None:
+        return None
+    if unit_mode == "K/uL":
+        return to_cells_per_uL_from_k(value)
+    return float(value)
+
+def normalize_lln_cells(value, unit_mode: str):
+    """LLN inputs for platelets/WBC/ANC in same unit mode as labs; normalize to /uL."""
+    if value is None:
+        return None
+    if unit_mode == "K/uL":
+        return to_cells_per_uL_from_k(value)
+    return float(value)
+
+# -------------------------
 # CTCAE v5.0-like numeric grading (LLN-based for cytopenias)
-# Note: Some CTCAE Grade 4 definitions are clinical; numeric surrogates are used here where standard.
 # -------------------------
 ctcae_criteria = {
     "Anemia": {
-        # Grade 1 requires Hgb < LLN; numeric band is <LLN to 10.0
-        "Grade 1": {"Hemoglobin": {"lt_lln_required": True, "min": 10.0, "max": None}},
+        "Grade 1": {"Hemoglobin": {"lt_lln_required": True, "min": 10.0, "max": None}},  # <LLN to 10
         "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},   # <10 to 8
         "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},  # <8
-        # Grade 4 anemia is clinical (life-threatening); not solely numeric in CTCAE table.
     },
     "Thrombocytopenia": {
         "Grade 1": {"Platelet": {"lt_lln_required": True, "min": 75000, "max": None}},  # <LLN to 75k
@@ -170,7 +207,6 @@ def determine_ctcae_grade(parameter: str, value, lln_map=None):
 
     for grade, limits in ctcae_criteria[parameter].items():
         for lab, t in limits.items():
-            # LLN gating
             if t.get("lt_lln_required"):
                 if not lln_map or lab not in lln_map or lln_map[lab] is None:
                     continue
@@ -182,7 +218,6 @@ def determine_ctcae_grade(parameter: str, value, lln_map=None):
             if min_ok and max_ok:
                 grade_hits.append(grade)
 
-    # highest severity
     for g in reversed(grade_order):
         if g in grade_hits:
             return g
@@ -190,17 +225,14 @@ def determine_ctcae_grade(parameter: str, value, lln_map=None):
 
 def ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr):
     """
-    CTCAE Creatinine Increased is ULN/baseline-dependent.
-    This function provides a commonly used numeric implementation:
-      - If baseline <= ULN: grade based on multiples of ULN
-      - If baseline > ULN: grade based on multiples of baseline
-    Returns "Grade 1".."Grade 4" or None.
+    Numeric implementation of CTCAE-like "Creatinine increased":
+      - If baseline <= ULN (or unknown): grade by multiple of ULN
+      - If baseline > ULN: grade by multiple of baseline
     """
     if current_cr is None or uln_cr is None or uln_cr <= 0:
         return None
     base = baseline_cr if baseline_cr is not None else None
 
-    # choose reference
     if base is None or base <= uln_cr:
         ref = uln_cr
     else:
@@ -210,11 +242,6 @@ def ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr):
     if ratio is None:
         return None
 
-    # Common CTCAE cutpoints:
-    # Grade 1: >ULN to 1.5x (or >1.0 to 1.5)
-    # Grade 2: >1.5 to 3.0
-    # Grade 3: >3.0 to 6.0
-    # Grade 4: >6.0
     if ratio > 6.0:
         return "Grade 4"
     if ratio > 3.0:
@@ -226,7 +253,7 @@ def ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr):
     return None
 
 # -------------------------
-# FDA-label-inspired dose modification guidance (high-level; verify with current label)
+# FDA-label-inspired dose modification guidance (educational; verify current label)
 # -------------------------
 dose_modifications = {
     "LUTATHERA": {
@@ -285,21 +312,13 @@ dose_modifications = {
             "Grade ≥ 3 (not amenable to medical intervention)": "Withhold PLUVICTO until improvement to Grade 2 or baseline. Reduce dose by 20% to 5.9 GBq (160 mCi).",
             "Recurrent Grade ≥ 3 after one dose reduction": "Permanently discontinue PLUVICTO.",
         },
-        "Fatigue": {
-            "Grade ≥ 3": "Withhold PLUVICTO until improvement to Grade 2 or baseline.",
-        },
-        "Electrolyte or metabolic abnormalities": {
-            "Grade ≥ 2": "Withhold PLUVICTO until improvement to Grade 1 or baseline.",
-        },
-        "Treatment delay > 4 weeks": {
-            "Any": "Permanently discontinue PLUVICTO.",
-        },
+        "Fatigue": {"Grade ≥ 3": "Withhold PLUVICTO until improvement to Grade 2 or baseline."},
+        "Electrolyte or metabolic abnormalities": {"Grade ≥ 2": "Withhold PLUVICTO until improvement to Grade 1 or baseline."},
+        "Treatment delay > 4 weeks": {"Any": "Permanently discontinue PLUVICTO."},
         "Other non-hematologic toxicity": {
-            "Any recurrent Grade 3 or 4 OR persistent/intolerable Grade 2 after one dose reduction": "Permanently discontinue PLUVICTO.",
+            "Any recurrent Grade 3 or 4 OR persistent/intolerable Grade 2 after one dose reduction": "Permanently discontinue PLUVICTO."
         },
-        "Any unacceptable toxicity": {
-            "Any": "Permanently discontinue PLUVICTO.",
-        },
+        "Any unacceptable toxicity": {"Any": "Permanently discontinue PLUVICTO."},
     },
 }
 
@@ -307,40 +326,24 @@ dose_modifications = {
 # Toxicity assessment functions
 # -------------------------
 def assess_lutathera_renal(baseline_cr, current_cr, baseline_clcr, current_clcr):
-    """
-    LUTATHERA label-trigger style:
-      - CLcr < 40 mL/min
-      - ≥40% increase from baseline creatinine
-      - ≥40% decrease from baseline CLcr
-    """
     issues = []
-
     if current_clcr is not None and current_clcr < 40:
         issues.append("CLcr < 40 mL/min")
-
     if baseline_cr is not None and current_cr is not None and baseline_cr > 0:
         if (current_cr / baseline_cr) >= 1.4:
             issues.append("≥40% increase from baseline creatinine")
-
     if baseline_clcr is not None and current_clcr is not None and baseline_clcr > 0:
         frac_decrease = (baseline_clcr - current_clcr) / baseline_clcr
         if frac_decrease >= 0.40:
             issues.append("≥40% decrease from baseline CLcr")
-
     return issues
 
 def assess_pluvicto_renal(baseline_cr, current_cr, uln_cr, baseline_clcr, current_clcr):
-    """
-    PLUVICTO label-trigger style:
-      - Confirmed creatinine Grade ≥ 2 OR CLcr < 30
-      - ≥40% creatinine increase AND >40% CLcr decrease (dose reduction trigger)
-      - Grade ≥ 3 renal toxicity -> discontinue (handled via creatinine grade if available)
-    """
     issues = []
     cr_grade = ctcae_creatinine_increase_grade(baseline_cr, current_cr, uln_cr)
-    op, n = normalize_grade_string(cr_grade) if cr_grade else (None, None)
+    _, n = normalize_grade_string(cr_grade) if cr_grade else (None, None)
 
-    # Primary hold triggers
+    # Hold triggers
     if current_clcr is not None and current_clcr < 30:
         issues.append("Confirmed creatinine Grade ≥ 2 OR CLcr < 30")
     elif n is not None and n >= 2:
@@ -355,7 +358,7 @@ def assess_pluvicto_renal(baseline_cr, current_cr, uln_cr, baseline_clcr, curren
                 if clcr_decrease > 0.40:
                     issues.append("≥40% creatinine increase AND >40% CLcr decrease")
 
-    # Discontinue trigger for Grade ≥ 3 renal toxicity
+    # Discontinue trigger (renal Grade ≥ 3)
     if n is not None and n >= 3:
         issues.append("Grade ≥ 3 renal toxicity")
 
@@ -372,7 +375,7 @@ def assess_lutathera_hepatic(bilirubin, uln_bilirubin, albumin_g_l, inr):
     return issues
 
 def grade_to_num(grade_str):
-    op, n = normalize_grade_string(grade_str)
+    _, n = normalize_grade_string(grade_str)
     return n
 
 # -------------------------
@@ -384,16 +387,44 @@ st.markdown("**CTCAE v5.0 grading + FDA label-inspired dose modification guidanc
 drug = st.selectbox("**Select Radionuclide Therapy**", options=["LUTATHERA", "PLUVICTO"], key="drug_selection")
 
 st.markdown("---")
-st.subheader("📊 Laboratory Values (enter blanks if not available)")
+st.subheader("🧮 Input Units (so entries match typical workflow)")
+
+unit_mode = st.radio(
+    "Choose how you enter CBC values:",
+    options=["K/uL (typical: Plt 100, WBC 2.0, ANC 4.0)", "/uL (absolute: Plt 100000, WBC 2000, ANC 4000)"],
+    index=0,
+    horizontal=True
+)
+cbc_units = "K/uL" if unit_mode.startswith("K/uL") else "/uL"
+
+st.caption(
+    "Internally, the app normalizes to **/uL** for CTCAE grading. "
+    "Switch units if your lab feed or workflow uses absolute counts."
+)
+
+st.markdown("---")
+st.subheader("📊 Laboratory Values")
 
 colA, colB = st.columns(2)
 
 with colA:
     st.markdown("### Hematology")
     hgb_txt = st.text_input("Hemoglobin (g/dL)", value="", placeholder="e.g., 10.8")
-    plt_txt = st.text_input("Platelets (/mm³)", value="", placeholder="e.g., 125000")
-    wbc_txt = st.text_input("WBC (/mm³)", value="", placeholder="e.g., 4200")
-    anc_txt = st.text_input("ANC (/mm³)", value="", placeholder="e.g., 1800")
+
+    if cbc_units == "K/uL":
+        plt_label = "Platelets (K/uL) — typical: 100"
+        wbc_label = "WBC (K/uL) — typical: 2.0"
+        anc_label = "ANC (K/uL) — typical: 4.0"
+        plt_ph, wbc_ph, anc_ph = "e.g., 100", "e.g., 2.0", "e.g., 4.0"
+    else:
+        plt_label = "Platelets (/uL) — typical: 100000"
+        wbc_label = "WBC (/uL) — typical: 2000"
+        anc_label = "ANC (/uL) — typical: 4000"
+        plt_ph, wbc_ph, anc_ph = "e.g., 100000", "e.g., 2000", "e.g., 4000"
+
+    plt_txt = st.text_input(plt_label, value="", placeholder=plt_ph)
+    wbc_txt = st.text_input(wbc_label, value="", placeholder=wbc_ph)
+    anc_txt = st.text_input(anc_label, value="", placeholder=anc_ph)
 
 with colB:
     st.markdown("### Renal")
@@ -403,16 +434,30 @@ with colB:
     baseline_clcr_txt = st.text_input("Baseline Creatinine Clearance (mL/min)", value="", placeholder="e.g., 85")
     current_clcr_txt = st.text_input("Current Creatinine Clearance (mL/min)", value="", placeholder="e.g., 55")
 
-st.markdown("### Reference Ranges (LLN for CTCAE Grade 1 cytopenias)")
+st.markdown("### Reference Ranges (LLN)")
+st.caption(
+    "Grade 1 cytopenias in CTCAE require values **below LLN**. "
+    "Enter LLN in the **same units** you selected above for CBC values."
+)
+
 colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
 with colLLN1:
     hgb_lln_txt = st.text_input("Hgb LLN (g/dL)", value="12.0")
 with colLLN2:
-    plt_lln_txt = st.text_input("Platelet LLN (/mm³)", value="150000")
+    if cbc_units == "K/uL":
+        plt_lln_txt = st.text_input("Platelet LLN (K/uL)", value="150")
+    else:
+        plt_lln_txt = st.text_input("Platelet LLN (/uL)", value="150000")
 with colLLN3:
-    wbc_lln_txt = st.text_input("WBC LLN (/mm³)", value="4000")
+    if cbc_units == "K/uL":
+        wbc_lln_txt = st.text_input("WBC LLN (K/uL)", value="4.0")
+    else:
+        wbc_lln_txt = st.text_input("WBC LLN (/uL)", value="4000")
 with colLLN4:
-    anc_lln_txt = st.text_input("ANC LLN (/mm³)", value="1500")
+    if cbc_units == "K/uL":
+        anc_lln_txt = st.text_input("ANC LLN (K/uL)", value="1.5")
+    else:
+        anc_lln_txt = st.text_input("ANC LLN (/uL)", value="1500")
 
 st.markdown("### Hepatic")
 colH1, colH2 = st.columns(2)
@@ -423,7 +468,7 @@ with colH2:
     alb_txt = st.text_input("Albumin (g/L)", value="", placeholder="e.g., 38")
     inr_txt = st.text_input("INR", value="", placeholder="e.g., 1.1")
 
-# PLUVICTO additional fields
+# PLUVICTO extras
 pluvicto_extras = {}
 if drug == "PLUVICTO":
     st.markdown("---")
@@ -439,16 +484,11 @@ if drug == "PLUVICTO":
         pluvicto_extras["electrolyte_grade"] = st.selectbox("Electrolyte/Metabolic Abnormality Grade", options=[None, 1, 2, 3, 4], index=0)
         pluvicto_extras["treatment_delay_weeks"] = st.text_input("Treatment delay (weeks) due to toxicity", value="", placeholder="e.g., 0")
 
-# LUTATHERA delay helper (optional)
 lutathera_delay_weeks_txt = ""
 if drug == "LUTATHERA":
     st.markdown("---")
     st.subheader("🧩 LUTATHERA Timing (optional)")
-    lutathera_delay_weeks_txt = st.text_input(
-        "Dose delay (weeks) due to toxicity (if applicable)",
-        value="",
-        placeholder="e.g., 0"
-    )
+    lutathera_delay_weeks_txt = st.text_input("Dose delay (weeks) due to toxicity (if applicable)", value="", placeholder="e.g., 0")
 
 st.markdown("---")
 
@@ -456,11 +496,11 @@ st.markdown("---")
 # Analyze
 # -------------------------
 if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
-    # Parse values
-    hemoglobin = parse_float(hgb_txt)
-    platelet = parse_int(plt_txt)
-    wbc = parse_int(wbc_txt)
-    anc = parse_int(anc_txt)
+    # Parse raw (as entered)
+    hgb_in = parse_float(hgb_txt)
+    plt_in = parse_float(plt_txt)
+    wbc_in = parse_float(wbc_txt)
+    anc_in = parse_float(anc_txt)
 
     baseline_creatinine = parse_float(baseline_cr_txt)
     current_creatinine = parse_float(current_cr_txt)
@@ -473,19 +513,38 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     albumin = parse_float(alb_txt)
     inr = parse_float(inr_txt)
 
+    # LLNs (as entered, may be K/uL for CBC values)
     hgb_lln = parse_float(hgb_lln_txt)
-    plt_lln = parse_int(plt_lln_txt)
-    wbc_lln = parse_int(wbc_lln_txt)
-    anc_lln = parse_int(anc_lln_txt)
+    plt_lln_in = parse_float(plt_lln_txt)
+    wbc_lln_in = parse_float(wbc_lln_txt)
+    anc_lln_in = parse_float(anc_lln_txt)
+
+    # Normalize CBC values to /uL for CTCAE grading
+    hemoglobin = hgb_in  # g/dL stays the same
+    platelet = normalize_platelets(plt_in, cbc_units)   # /uL
+    wbc = normalize_wbc(wbc_in, cbc_units)              # /uL
+    anc = normalize_anc(anc_in, cbc_units)              # /uL
+
+    # Normalize LLNs for CBC to /uL
+    plt_lln = normalize_lln_cells(plt_lln_in, cbc_units)
+    wbc_lln = normalize_lln_cells(wbc_lln_in, cbc_units)
+    anc_lln = normalize_lln_cells(anc_lln_in, cbc_units)
 
     lln_map = {"Hemoglobin": hgb_lln, "Platelet": plt_lln, "WBC": wbc_lln, "ANC": anc_lln}
 
     # Determine if anything entered
     has_values = any([
-        hemoglobin is not None, platelet is not None, wbc is not None, anc is not None,
-        current_creatinine is not None, current_clcr is not None,
-        bilirubin is not None, albumin is not None, inr is not None
+        hemoglobin is not None,
+        platelet is not None,
+        wbc is not None,
+        anc is not None,
+        current_creatinine is not None,
+        current_clcr is not None,
+        bilirubin is not None,
+        albumin is not None,
+        inr is not None
     ])
+
     if drug == "PLUVICTO":
         has_values = has_values or any([
             pluvicto_extras.get("dry_mouth_grade") is not None,
@@ -494,6 +553,7 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
             pluvicto_extras.get("electrolyte_grade") is not None,
             parse_float(pluvicto_extras.get("treatment_delay_weeks", "")) not in (None, 0.0),
         ])
+
     if drug == "LUTATHERA":
         has_values = has_values or (parse_float(lutathera_delay_weeks_txt) not in (None, 0.0))
 
@@ -502,25 +562,25 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
         st.stop()
 
     detected_issues = []
-    supporting = []
+    supporting_heme = []
 
     # Hematology grading
     if hemoglobin is not None:
         g = determine_ctcae_grade("Anemia", hemoglobin, lln_map)
         if g:
-            supporting.append(("Anemia", g, hemoglobin))
+            supporting_heme.append(("Anemia", g, hemoglobin))
     if platelet is not None:
         g = determine_ctcae_grade("Thrombocytopenia", platelet, lln_map)
         if g:
-            supporting.append(("Thrombocytopenia", g, platelet))
+            supporting_heme.append(("Thrombocytopenia", g, platelet))
     if wbc is not None:
         g = determine_ctcae_grade("Leukopenia", wbc, lln_map)
         if g:
-            supporting.append(("Leukopenia", g, wbc))
+            supporting_heme.append(("Leukopenia", g, wbc))
     if anc is not None:
         g = determine_ctcae_grade("Neutropenia", anc, lln_map)
         if g:
-            supporting.append(("Neutropenia", g, anc))
+            supporting_heme.append(("Neutropenia", g, anc))
 
     # Renal assessment
     cr_ctcae_grade = None
@@ -541,7 +601,7 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     for issue in hepatic_issues:
         detected_issues.append(("Hepatotoxicity", issue, None))
 
-    # PLUVICTO-specific assessments
+    # PLUVICTO extras
     if drug == "PLUVICTO":
         dry = pluvicto_extras.get("dry_mouth_grade")
         if dry is not None and dry >= 2:
@@ -570,27 +630,21 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
         if delay_weeks is not None and delay_weeks > 16:
             detected_issues.append(("Dose delayed > 16 weeks", "Any", delay_weeks))
 
-    # PLUVICTO: group myelosuppression from cytopenias
-    if drug == "PLUVICTO" and supporting:
-        heme_grades = []
-        for tox, g, v in supporting:
-            n = grade_to_num(g)
-            if n is not None:
-                heme_grades.append(n)
+    # Group myelosuppression for PLUVICTO
+    if drug == "PLUVICTO" and supporting_heme:
+        heme_grades = [grade_to_num(g) for _, g, _ in supporting_heme if grade_to_num(g) is not None]
         if heme_grades:
             highest = max(heme_grades)
             if highest >= 2:
-                # Remove individual heme issues from detected_issues (we didn't add them yet)
-                detected_issues.append(("Myelosuppression", f"Grade {highest}" if highest < 3 else "Grade ≥ 3", supporting))
+                detected_issues.append((
+                    "Myelosuppression",
+                    "Grade 2" if highest == 2 else "Grade ≥ 3",
+                    supporting_heme
+                ))
 
-    # LUTATHERA: add individual heme issues (label is per-toxicity category)
+    # Individual heme issues for LUTATHERA (label-triggered grades only)
     if drug == "LUTATHERA":
-        for tox, g, v in supporting:
-            # Only include grades that actually trigger LUTATHERA modifications:
-            # - Thrombocytopenia: Grade 2–4
-            # - Anemia: Grade 3–4
-            # - Neutropenia: Grade 3–4
-            # - Leukopenia: Grade 2–4 (some sites choose to track; included here)
+        for tox, g, v in supporting_heme:
             n = grade_to_num(g)
             if tox == "Thrombocytopenia" and n is not None and n >= 2:
                 detected_issues.append(("Thrombocytopenia", g, [("Platelets", g, v)]))
@@ -607,6 +661,22 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     if detected_issues:
         st.success(f"✅ **Analysis Complete**: Found {len(detected_issues)} issue(s) to review")
 
+        # Show normalized interpretation (quick audit trail)
+        with st.expander("🔎 Input normalization (how your entries were interpreted)", expanded=False):
+            st.markdown("**CBC units selected:** " + cbc_units)
+            if platelet is not None:
+                st.markdown(f"• Platelets interpreted as **{int(round(platelet)):,} /uL**")
+            if wbc is not None:
+                st.markdown(f"• WBC interpreted as **{int(round(wbc)):,} /uL**")
+            if anc is not None:
+                st.markdown(f"• ANC interpreted as **{int(round(anc)):,} /uL**")
+            if plt_lln is not None:
+                st.markdown(f"• Platelet LLN interpreted as **{int(round(plt_lln)):,} /uL**")
+            if wbc_lln is not None:
+                st.markdown(f"• WBC LLN interpreted as **{int(round(wbc_lln)):,} /uL**")
+            if anc_lln is not None:
+                st.markdown(f"• ANC LLN interpreted as **{int(round(anc_lln)):,} /uL**")
+
         st.markdown("---")
         st.subheader("📋 Dose Modification Recommendations (educational)")
 
@@ -615,21 +685,15 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
         for i, (issue_type, grade_or_condition, details) in enumerate(detected_issues, 1):
             title = f"**{i}. {issue_type}: {grade_or_condition}**"
             with st.expander(title, expanded=True):
-                guidance = None
-
-                # Normalize LUTATHERA labeling: issue_type keys are the toxicity names
-                # For renal/hepatic we stored as "Renal Toxicity"/"Hepatotoxicity" and use those keys
-                lookup_type = issue_type
-
-                # Map "Dose delayed > 16 weeks" into LUTATHERA-level discontinuation note
+                # LUTATHERA delay special-case
                 if drug == "LUTATHERA" and issue_type == "Dose delayed > 16 weeks":
                     st.error("⛔ **Dose delay >16 weeks due to toxicity** is a discontinuation criterion in LUTATHERA dose-mod tables.")
-                    if details is not None:
-                        st.markdown(f"**Entered delay (weeks):** {details}")
+                    st.markdown(f"**Entered delay (weeks):** {details}")
                     continue
 
-                if lookup_type in drug_modifications:
-                    guidance = pick_guidance(drug_modifications[lookup_type], grade_or_condition)
+                guidance = None
+                if issue_type in drug_modifications:
+                    guidance = pick_guidance(drug_modifications[issue_type], grade_or_condition)
 
                 if guidance:
                     st.markdown(f"**📝 Recommendation:** {guidance}")
@@ -641,10 +705,18 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
                     if isinstance(details, list):
                         st.markdown("**Supporting Data:**")
                         for a, b, c in details:
-                            if c is not None:
-                                st.markdown(f"• {a}: {c} ({b})")
-                            else:
+                            if c is None:
                                 st.markdown(f"• {a}: {b}")
+                            else:
+                                # Show CBC values in the user's unit mode (friendlier)
+                                if a in ("Platelets", "WBC", "ANC"):
+                                    if cbc_units == "K/uL":
+                                        c_disp = c / 1000.0
+                                        st.markdown(f"• {a}: {c_disp:g} K/uL ({b})")
+                                    else:
+                                        st.markdown(f"• {a}: {int(round(c)):,} /uL ({b})")
+                                else:
+                                    st.markdown(f"• {a}: {c} ({b})")
                     else:
                         st.markdown(f"**Value/Detail:** {details}")
 
