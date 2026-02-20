@@ -442,22 +442,22 @@ st.caption(
 
 colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
 with colLLN1:
-    hgb_lln_txt = st.text_input("Hgb LLN (g/dL)", value="12.0")
+    hgb_lln_txt = st.text_input("Hgb (g/dL)", value="10.0")
 with colLLN2:
     if cbc_units == "K/uL":
-        plt_lln_txt = st.text_input("Platelet LLN (K/uL)", value="150")
+        plt_lln_txt = st.text_input("Platelet (K/uL)", value="150")
     else:
-        plt_lln_txt = st.text_input("Platelet LLN (/uL)", value="150000")
+        plt_lln_txt = st.text_input("Platelet (/uL)", value="150000")
 with colLLN3:
     if cbc_units == "K/uL":
-        wbc_lln_txt = st.text_input("WBC LLN (K/uL)", value="4.0")
+        wbc_lln_txt = st.text_input("WBC (K/uL)", value="3.0")
     else:
-        wbc_lln_txt = st.text_input("WBC LLN (/uL)", value="4000")
+        wbc_lln_txt = st.text_input("WBC (/uL)", value="3000")
 with colLLN4:
     if cbc_units == "K/uL":
-        anc_lln_txt = st.text_input("ANC LLN (K/uL)", value="1.5")
+        anc_lln_txt = st.text_input("ANC (K/uL)", value="1.5")
     else:
-        anc_lln_txt = st.text_input("ANC LLN (/uL)", value="1500")
+        anc_lln_txt = st.text_input("ANC (/uL)", value="1500")
 
 st.markdown("### Hepatic")
 colH1, colH2 = st.columns(2)
