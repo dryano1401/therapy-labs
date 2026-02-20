@@ -158,44 +158,36 @@ def normalize_anc(value, unit_mode: str):
         return to_cells_per_uL_from_k(value)
     return float(value)
 
-def normalize_lln_cells(value, unit_mode: str):
-    """LLN inputs for platelets/WBC/ANC in same unit mode as labs; normalize to /uL."""
-    if value is None:
-        return None
-    if unit_mode == "K/uL":
-        return to_cells_per_uL_from_k(value)
-    return float(value)
-
 # -------------------------
 # CTCAE v5.0-like numeric grading (LLN-based for cytopenias)
 # -------------------------
 ctcae_criteria = {
     "Anemia": {
-        "Grade 1": {"Hemoglobin": {"lt_lln_required": True, "min": 10.0, "max": None}},  # <LLN to 10
-        "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},   # <10 to 8
-        "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},  # <8
+        "Grade 1": {"Hemoglobin": {"min": 10.0, "max": 11.999}},  # 10.0 to <12.0
+        "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},    # 8.0 to <10.0
+        "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},    # <8.0
     },
     "Thrombocytopenia": {
-        "Grade 1": {"Platelet": {"lt_lln_required": True, "min": 75000, "max": None}},  # <LLN to 75k
+        "Grade 1": {"Platelet": {"min": 75000, "max": 149999}},   # 75,000 to <150,000
         "Grade 2": {"Platelet": {"min": 50000, "max": 74999}},
         "Grade 3": {"Platelet": {"min": 25000, "max": 49999}},
         "Grade 4": {"Platelet": {"min": 0, "max": 24999}},
     },
     "Leukopenia": {
-        "Grade 1": {"WBC": {"lt_lln_required": True, "min": 3000, "max": None}},  # <LLN to 3000
+        "Grade 1": {"WBC": {"min": 3000, "max": 3999}},           # 3,000 to <4,000
         "Grade 2": {"WBC": {"min": 2000, "max": 2999}},
         "Grade 3": {"WBC": {"min": 1000, "max": 1999}},
         "Grade 4": {"WBC": {"min": 0, "max": 999}},
     },
     "Neutropenia": {
-        "Grade 1": {"ANC": {"lt_lln_required": True, "min": 1500, "max": None}},  # <LLN to 1500
+        "Grade 1": {"ANC": {"min": 1500, "max": 1999}},           # 1,500 to <2,000
         "Grade 2": {"ANC": {"min": 1000, "max": 1499}},
         "Grade 3": {"ANC": {"min": 500, "max": 999}},
         "Grade 4": {"ANC": {"min": 0, "max": 499}},
     },
 }
 
-def determine_ctcae_grade(parameter: str, value, lln_map=None):
+def determine_ctcae_grade(parameter: str, value):
     """Determine CTCAE grade for a parameter using numeric criteria + LLN gating when required."""
     if value is None:
         return None
@@ -207,11 +199,6 @@ def determine_ctcae_grade(parameter: str, value, lln_map=None):
 
     for grade, limits in ctcae_criteria[parameter].items():
         for lab, t in limits.items():
-            if t.get("lt_lln_required"):
-                if not lln_map or lab not in lln_map or lln_map[lab] is None:
-                    continue
-                if value >= lln_map[lab]:
-                    continue
 
             min_ok = True if t.get("min") is None else (value >= t["min"])
             max_ok = True if t.get("max") is None else (value <= t["max"])
@@ -433,31 +420,6 @@ with colB:
     uln_cr_txt = st.text_input("ULN Creatinine (mg/dL)", value="1.2", placeholder="e.g., 1.2")
     baseline_clcr_txt = st.text_input("Baseline Creatinine Clearance (mL/min)", value="", placeholder="e.g., 85")
     current_clcr_txt = st.text_input("Current Creatinine Clearance (mL/min)", value="", placeholder="e.g., 55")
-    
-st.markdown("### Reference Ranges (LLN)")
-st.caption(
-    "Grade 1 cytopenias in CTCAE require values **below LLN**. "
-    "Enter LLN in the **same units** you selected above for CBC values."
-)
-
-colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
-with colLLN1:
-    hgb_lln_txt = st.text_input("Hgb (g/dL)", value="10.0")
-with colLLN2:
-    if cbc_units == "K/uL":
-        plt_lln_txt = st.text_input("Platelet (K/uL)", value="150")
-    else:
-        plt_lln_txt = st.text_input("Platelet (/uL)", value="150000")
-with colLLN3:
-    if cbc_units == "K/uL":
-        wbc_lln_txt = st.text_input("WBC (K/uL)", value="3.0")
-    else:
-        wbc_lln_txt = st.text_input("WBC (/uL)", value="3000")
-with colLLN4:
-    if cbc_units == "K/uL":
-        anc_lln_txt = st.text_input("ANC (K/uL)", value="1.5")
-    else:
-        anc_lln_txt = st.text_input("ANC (/uL)", value="1500")
 
 st.markdown("### Hepatic")
 colH1, colH2 = st.columns(2)
@@ -513,25 +475,6 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     albumin = parse_float(alb_txt)
     inr = parse_float(inr_txt)
 
-    # LLNs (as entered, may be K/uL for CBC values)
-    hgb_lln = parse_float(hgb_lln_txt)
-    plt_lln_in = parse_float(plt_lln_txt)
-    wbc_lln_in = parse_float(wbc_lln_txt)
-    anc_lln_in = parse_float(anc_lln_txt)
-
-    # Normalize CBC values to /uL for CTCAE grading
-    hemoglobin = hgb_in  # g/dL stays the same
-    platelet = normalize_platelets(plt_in, cbc_units)   # /uL
-    wbc = normalize_wbc(wbc_in, cbc_units)              # /uL
-    anc = normalize_anc(anc_in, cbc_units)              # /uL
-
-    # Normalize LLNs for CBC to /uL
-    plt_lln = normalize_lln_cells(plt_lln_in, cbc_units)
-    wbc_lln = normalize_lln_cells(wbc_lln_in, cbc_units)
-    anc_lln = normalize_lln_cells(anc_lln_in, cbc_units)
-
-    lln_map = {"Hemoglobin": hgb_lln, "Platelet": plt_lln, "WBC": wbc_lln, "ANC": anc_lln}
-
     # Determine if anything entered
     has_values = any([
         hemoglobin is not None,
@@ -566,19 +509,19 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
 
     # Hematology grading
     if hemoglobin is not None:
-        g = determine_ctcae_grade("Anemia", hemoglobin, lln_map)
+       g = determine_ctcae_grade("Anemia", hemoglobin)
         if g:
             supporting_heme.append(("Anemia", g, hemoglobin))
     if platelet is not None:
-        g = determine_ctcae_grade("Thrombocytopenia", platelet, lln_map)
+        g = determine_ctcae_grade("Thrombocytopenia", platelet)
         if g:
             supporting_heme.append(("Thrombocytopenia", g, platelet))
     if wbc is not None:
-        g = determine_ctcae_grade("Leukopenia", wbc, lln_map)
+        g = determine_ctcae_grade("Leukopenia", wbc)
         if g:
             supporting_heme.append(("Leukopenia", g, wbc))
     if anc is not None:
-        g = determine_ctcae_grade("Neutropenia", anc, lln_map)
+        g = determine_ctcae_grade("Neutropenia", anc)
         if g:
             supporting_heme.append(("Neutropenia", g, anc))
 
@@ -670,12 +613,7 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
                 st.markdown(f"• WBC interpreted as **{int(round(wbc)):,} /uL**")
             if anc is not None:
                 st.markdown(f"• ANC interpreted as **{int(round(anc)):,} /uL**")
-            if plt_lln is not None:
-                st.markdown(f"• Platelet LLN interpreted as **{int(round(plt_lln)):,} /uL**")
-            if wbc_lln is not None:
-                st.markdown(f"• WBC LLN interpreted as **{int(round(wbc_lln)):,} /uL**")
-            if anc_lln is not None:
-                st.markdown(f"• ANC LLN interpreted as **{int(round(anc_lln)):,} /uL**")
+
 
         st.markdown("---")
         st.subheader("📋 Dose Modification Recommendations (educational)")
