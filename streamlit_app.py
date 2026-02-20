@@ -433,31 +433,31 @@ with colB:
     uln_cr_txt = st.text_input("ULN Creatinine (mg/dL)", value="1.2", placeholder="e.g., 1.2")
     baseline_clcr_txt = st.text_input("Baseline Creatinine Clearance (mL/min)", value="", placeholder="e.g., 85")
     current_clcr_txt = st.text_input("Current Creatinine Clearance (mL/min)", value="", placeholder="e.g., 55")
-
-st.markdown("### Reference Ranges (LLN)")
-st.caption(
-    "Grade 1 cytopenias in CTCAE require values **below LLN**. "
-    "Enter LLN in the **same units** you selected above for CBC values."
-)
-
-colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
-with colLLN1:
-    hgb_lln_txt = st.text_input("Hgb (g/dL)", value="10.0")
-with colLLN2:
-    if cbc_units == "K/uL":
-        plt_lln_txt = st.text_input("Platelet (K/uL)", value="150")
-    else:
-        plt_lln_txt = st.text_input("Platelet (/uL)", value="150000")
-with colLLN3:
-    if cbc_units == "K/uL":
-        wbc_lln_txt = st.text_input("WBC (K/uL)", value="3.0")
-    else:
-        wbc_lln_txt = st.text_input("WBC (/uL)", value="3000")
-with colLLN4:
-    if cbc_units == "K/uL":
-        anc_lln_txt = st.text_input("ANC (K/uL)", value="1.5")
-    else:
-        anc_lln_txt = st.text_input("ANC (/uL)", value="1500")
+    
+#st.markdown("### Reference Ranges (LLN)")
+#st.caption(
+#    "Grade 1 cytopenias in CTCAE require values **below LLN**. "
+#    "Enter LLN in the **same units** you selected above for CBC values."
+#)
+#
+#colLLN1, colLLN2, colLLN3, colLLN4 = st.columns(4)
+#with colLLN1:
+#    hgb_lln_txt = st.text_input("Hgb (g/dL)", value="10.0")
+#with colLLN2:
+#    if cbc_units == "K/uL":
+#        plt_lln_txt = st.text_input("Platelet (K/uL)", value="150")
+#    else:
+#        plt_lln_txt = st.text_input("Platelet (/uL)", value="150000")
+#with colLLN3:
+#    if cbc_units == "K/uL":
+#        wbc_lln_txt = st.text_input("WBC (K/uL)", value="3.0")
+#    else:
+#        wbc_lln_txt = st.text_input("WBC (/uL)", value="3000")
+#with colLLN4:
+#    if cbc_units == "K/uL":
+#        anc_lln_txt = st.text_input("ANC (K/uL)", value="1.5")
+#    else:
+#        anc_lln_txt = st.text_input("ANC (/uL)", value="1500")
 
 st.markdown("### Hepatic")
 colH1, colH2 = st.columns(2)
