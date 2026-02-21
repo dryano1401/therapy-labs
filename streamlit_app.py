@@ -509,17 +509,20 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
 
     # Hematology grading
     if hemoglobin is not None:
-       g = determine_ctcae_grade("Anemia", hemoglobin)
+        g = determine_ctcae_grade("Anemia", hemoglobin)
         if g:
             supporting_heme.append(("Anemia", g, hemoglobin))
+
     if platelet is not None:
         g = determine_ctcae_grade("Thrombocytopenia", platelet)
         if g:
             supporting_heme.append(("Thrombocytopenia", g, platelet))
+
     if wbc is not None:
         g = determine_ctcae_grade("Leukopenia", wbc)
         if g:
             supporting_heme.append(("Leukopenia", g, wbc))
+
     if anc is not None:
         g = determine_ctcae_grade("Neutropenia", anc)
         if g:
