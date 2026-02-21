@@ -118,13 +118,6 @@ def pick_guidance(type_modifications: dict, grade_or_condition: str):
 #   - Platelets: /mm^3 (same as /uL) numeric thresholds like 75,000
 #   - WBC: /mm^3 numeric thresholds like 3,000
 #   - ANC: /mm^3 numeric thresholds like 1,500
-#
-# Many clinical workflows enter:
-#   - Platelets as K/uL (e.g., 100)
-#   - WBC as K/uL (e.g., 2.0)
-#   - ANC as K/uL (e.g., 4.0)
-#
-# We'll let the user choose their input unit system and normalize internally.
 # -------------------------
 def to_cells_per_uL_from_k(value_k):
     """Convert K/uL to /uL."""
@@ -159,28 +152,33 @@ def normalize_anc(value, unit_mode: str):
     return float(value)
 
 # -------------------------
-# CTCAE v5.0-like numeric grading (LLN-based for cytopenias)
+# CTCAE-like numeric grading (LLN REMOVED)
+# NOTE: Without LLN, Grade 1 ranges are approximated to common thresholds:
+#   - Hgb: 10.0 to <12.0
+#   - Plt: 75,000 to <150,000
+#   - WBC: 3,000 to <4,000
+#   - ANC: 1,500 to <2,000
 # -------------------------
 ctcae_criteria = {
     "Anemia": {
-        "Grade 1": {"Hemoglobin": {"min": 10.0, "max": 11.999}},  # 10.0 to <12.0
-        "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},    # 8.0 to <10.0
-        "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},    # <8.0
+        "Grade 1": {"Hemoglobin": {"min": 10.0, "max": 11.999}},
+        "Grade 2": {"Hemoglobin": {"min": 8.0, "max": 9.999}},
+        "Grade 3": {"Hemoglobin": {"min": 0.0, "max": 7.999}},
     },
     "Thrombocytopenia": {
-        "Grade 1": {"Platelet": {"min": 75000, "max": 149999}},   # 75,000 to <150,000
+        "Grade 1": {"Platelet": {"min": 75000, "max": 149999}},
         "Grade 2": {"Platelet": {"min": 50000, "max": 74999}},
         "Grade 3": {"Platelet": {"min": 25000, "max": 49999}},
         "Grade 4": {"Platelet": {"min": 0, "max": 24999}},
     },
     "Leukopenia": {
-        "Grade 1": {"WBC": {"min": 3000, "max": 3999}},           # 3,000 to <4,000
+        "Grade 1": {"WBC": {"min": 3000, "max": 3999}},
         "Grade 2": {"WBC": {"min": 2000, "max": 2999}},
         "Grade 3": {"WBC": {"min": 1000, "max": 1999}},
         "Grade 4": {"WBC": {"min": 0, "max": 999}},
     },
     "Neutropenia": {
-        "Grade 1": {"ANC": {"min": 1500, "max": 1999}},           # 1,500 to <2,000
+        "Grade 1": {"ANC": {"min": 1500, "max": 1999}},
         "Grade 2": {"ANC": {"min": 1000, "max": 1499}},
         "Grade 3": {"ANC": {"min": 500, "max": 999}},
         "Grade 4": {"ANC": {"min": 0, "max": 499}},
@@ -188,7 +186,7 @@ ctcae_criteria = {
 }
 
 def determine_ctcae_grade(parameter: str, value):
-    """Determine CTCAE grade for a parameter using numeric criteria + LLN gating when required."""
+    """Determine CTCAE grade for a parameter using numeric criteria."""
     if value is None:
         return None
     if parameter not in ctcae_criteria:
@@ -198,8 +196,7 @@ def determine_ctcae_grade(parameter: str, value):
     grade_order = ["Grade 1", "Grade 2", "Grade 3", "Grade 4"]
 
     for grade, limits in ctcae_criteria[parameter].items():
-        for lab, t in limits.items():
-
+        for _, t in limits.items():
             min_ok = True if t.get("min") is None else (value >= t["min"])
             max_ok = True if t.get("max") is None else (value <= t["max"])
             if min_ok and max_ok:
@@ -475,6 +472,12 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     albumin = parse_float(alb_txt)
     inr = parse_float(inr_txt)
 
+    # Normalize CBC values to /uL for CTCAE grading
+    hemoglobin = hgb_in  # g/dL stays the same
+    platelet = normalize_platelets(plt_in, cbc_units)   # /uL
+    wbc = normalize_wbc(wbc_in, cbc_units)              # /uL
+    anc = normalize_anc(anc_in, cbc_units)              # /uL
+
     # Determine if anything entered
     has_values = any([
         hemoglobin is not None,
@@ -531,7 +534,9 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     # Renal assessment
     cr_ctcae_grade = None
     if drug == "LUTATHERA":
-        renal_issues = assess_lutathera_renal(baseline_creatinine, current_creatinine, baseline_clcr, current_clcr)
+        renal_issues = assess_lutathera_renal(
+            baseline_creatinine, current_creatinine, baseline_clcr, current_clcr
+        )
         for issue in renal_issues:
             detected_issues.append(("Renal Toxicity", issue, None))
 
@@ -607,7 +612,6 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
     if detected_issues:
         st.success(f"✅ **Analysis Complete**: Found {len(detected_issues)} issue(s) to review")
 
-        # Show normalized interpretation (quick audit trail)
         with st.expander("🔎 Input normalization (how your entries were interpreted)", expanded=False):
             st.markdown("**CBC units selected:** " + cbc_units)
             if platelet is not None:
@@ -616,7 +620,6 @@ if st.button("🔍 **Analyze Laboratory Values**", type="primary"):
                 st.markdown(f"• WBC interpreted as **{int(round(wbc)):,} /uL**")
             if anc is not None:
                 st.markdown(f"• ANC interpreted as **{int(round(anc)):,} /uL**")
-
 
         st.markdown("---")
         st.subheader("📋 Dose Modification Recommendations (educational)")
